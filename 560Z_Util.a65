@@ -1550,6 +1550,8 @@ ZSTEP:
 	lda #TIMEL
 	jsr BUILD
 
+	jsr CRLF
+
 	ldx CKLN
 	lda CKLN+1
 	sta BITPAT
@@ -1562,6 +1564,9 @@ ZSTEP:
 	jsr ZTRACE	;Output current bus state
 	jsr Z80IO	;Check if Z80 is requesting I/O
 	ZRUNLP:
+	jsr STEPDLY
+	jsr STEPDLY
+
 	ldx CKLN
 	lda NOTBPT	;Toggle clock
 	and BASE,X
@@ -1571,6 +1576,7 @@ ZSTEP:
 	jsr Z80IO	;Check if Z80 is requesting I/O
 
 	jsr STEPDLY
+	jsr STEPDLY
 
 	ldx CKLN
 	lda BITPAT	;Toggle clock
@@ -1579,7 +1585,5 @@ ZSTEP:
 
 	jsr ZTRACE	;Output current bus state
 	jsr Z80IO	;Check if Z80 is requesting I/O
-
-	jsr STEPDLY
 
 	jmp ZRUNLP
