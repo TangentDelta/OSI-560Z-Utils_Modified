@@ -1,0 +1,850 @@
+;560Z IOT, interrupt, and switch register
+; handler for the 6100
+;
+;
+PNTL=$03
+PNTH=$04
+TEMP=$0C
+;
+DCODE=$1A
+OCODE=$1B
+DCODEL=$1C
+DEVL=$1D
+DEVH=$1E
+COUNT=$1F
+COUNT2=$20
+;
+;Change the line below based on your 560Z setup.
+;The default PIA base address of the 560Z is $F000
+BASE=$B000	;560Z PIA base address
+;
+;
+;Defines for optional auxiliary ACIA
+;
+ACIA6551 = $9400
+ACIA6551_Data = ACIA6551
+ACIA6551_Status = ACIA6551+1
+ACIA6551_Command = ACIA6551+2
+ACIA6551_Control = ACIA6551+3
+;
+;Defines for standard OSI 502/510 6850 ACIA
+;
+ACIA6850	= $FC00
+ACIA6850_Data	= ACIA6850+1
+ACIA6850_Control	= ACIA6850 
+;
+;Change the line below to set the ACIA to use with this driver package.
+;1 = use an auxiliary 6551 ACIA
+;2 = use the OSI 502/510's built-in ACIA
+ACIA = 2
+;
+;Defines for which ACIA to use
+;
+.if ACIA = 1
+	ACIA_Status = ACIA6551_Status
+	ACIA_Data = ACIA6551_Data
+	ACIA_Flag_TX = $10
+	ACIA_Flag_RX = $08
+.elseif ACIA = 2
+	ACIA_Status = ACIA6850_Control
+	ACIA_Data = ACIA6850_Data
+	ACIA_Flag_TX = $02
+	ACIA_Flag_RX = $01
+.else
+	.fatal "ACIA selection is not valid!"
+.endif
+
+;
+DELAYC=200
+DELAYD=3
+;
+;References to utilities package
+;
+.import READD,INPUT,OUTPUT,OUTBL,OUTBH,CRLF,PROC12,PROC8,OCTDIG,RUNSTP,CKLN,INTREQ,SWSEL,A8,D7,A7,DEVSEL,C0,C1,C2,SKP,XTC,D11,BYTE,OUTCH
+.export I61IO,SWREG,TRACE
+;
+.segment "I6100IO"
+;
+I61IO:
+START:
+	.if ACIA = 1		;Init auxiliary ACIA if enabled
+		LDA #$1E        ;* Init ACIA to 9600 Baud.
+		STA ACIA6551_Control
+		LDA #$0B        ;* No Parity.
+		STA ACIA6551_Command
+	.endif
+
+	lda #DELAYD		;Set up initial delay counter values
+	sta COUNT2
+	lda #DELAYC
+	sta COUNT
+HANIOT:
+	lda INTFLG		;Interrupts enabled?
+	beq HANA
+	lda PFLAG		;Printer interrupts enabled?
+	bne NOUTA
+CHEK:				;Check system values and set flags for interrupt generation
+	lda ACIA_Status
+	and #ACIA_Flag_TX		;Test if transmitter buffer is empty (TBMT on original UART)
+	beq NOUT
+	lda #1
+	sta FLAGS+4		;Transmitter empty flag
+	sta PFLAG		;Printer interrupt enable
+	bne GENINT
+NOUTA:
+	dec COUNT
+	bne NOUT
+	dec COUNT2
+	bne NOUT
+	lda #DELAYD
+	sta COUNT2
+	lda #DELAYC
+	sta COUNT
+	jmp CHEK
+NOUT:
+	lda ACIA_Status
+	and #ACIA_Flag_RX		;Test if receiver data is available (RDA on original UART)
+	beq NOINP
+	lda #$01		;Receiver data available flag
+	sta FLAGS+3
+;
+GENINT:
+	ldx INTREQ
+	lda INTREQ+1
+	jsr OUTBL
+	jmp HANA
+;
+NOINP:
+	jsr CLRINT
+HANA:
+
+	ldx DEVSEL		;Wait for DEVSEL low
+	jsr READD
+	bit DEVSEL+1
+	beq ANIOT
+
+	ldx SWSEL
+	jsr READD
+	bit SWSEL+1
+	bne HANIOT
+	jmp SWITCH
+;
+ANIOT:				;Device select handler
+
+	ldx RUNSTP		;Set single-step mode
+	lda RUNSTP+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+
+	ldx CKLN		;Ensure step bit is output
+	lda CKLN+1
+	jsr OUTPUT
+
+	jsr READOP		;Read IOT opcode and decode it
+	jsr HANREQ		;Decode device request and call IOT handler
+
+	jmp HANPOST		;Decode device request and call post IOT handler
+
+	;lda DCODEH
+	;asl a
+	;tax
+	;lda POSTH,X
+	;sta DEVL
+	;lda POSTH+1,X
+	;sta DEVH
+	;lda DCODE
+	;asl a
+	;tay
+
+	;lda (DEVL),Y	;Set up device select jump vector
+	;sta PNTL
+	;iny
+	;lda (DEVL),Y
+	;sta PNTH
+	;jmp (PNTL)
+;
+;Switch register value
+;
+SWREG:	.word 0
+;
+;Interrupt enable flag
+;
+INTFLG:	.byte 0
+;
+;IOT trace flag
+;
+TRACE:	.byte 0
+;
+;Whether in the 1st DEVSEL or 2nd
+;
+STATE:	.byte 0
+;
+;Printer interrupt enable flag
+;
+PFLAG:	.byte 1
+;
+;Handle a request for a switch register value
+;
+SWITCH:
+	ldx RUNSTP
+	lda RUNSTP+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+
+	ldx CKLN
+	lda CKLN+1
+	jsr OUTPUT
+
+	lda D7
+	lda #$FF
+	jsr OUTPUT
+	lda SWREG
+	sta BASE,X
+
+	ldx D11
+	lda D11+1
+	ora D11+3
+	ora D11+5
+	ora D11+7
+	pha
+	jsr OUTPUT
+	pla
+	pha
+
+	eor #$FF
+	sta TEMP
+	lda BASE,X
+	and TEMP
+	ora SWREG+1
+	sta BASE,X
+WACXTC:
+	jsr CLOCK
+	ldx XTC
+	jsr READD
+	bit XTC+1
+	bne WACXTC
+
+	pla
+	ldx D11
+	jsr INPUT
+	ldx D7
+	lda #$FF
+	jsr INPUT
+WACSWT:
+	jsr CLOCK
+	ldx SWSEL
+	jsr READD
+	bit SWSEL+1
+	beq WACSWT
+	jmp FULLSP
+;
+;Subroutine to handle actual IOT request
+;
+HANREQ:
+	lda DCODE		;DEV = HDEVIC[DCODE*2 >> 3]
+	and #%111000
+	lsr a			
+	lsr a
+	tax
+	lda HDEVIC,X
+	sta DEVL
+	lda HDEVIC+1,X
+	sta DEVH
+
+	lda DCODEL		;PNT = DEVICE[DCODE && 0b000111]
+	asl a			;Multiply by 2
+	tay
+	lda (DEVL),Y
+	sta PNTL
+	iny
+	lda (DEVL),Y
+	sta PNTH
+
+	lda OCODE		;Get device function indexed by device control code
+	asl a			;Multiply by 2
+	tay				;PNT = KEYB[OCODE]
+	lda (PNTL),Y
+	tax
+	iny
+	lda (PNTL),Y
+
+	sta PNTH
+	txa
+	sta PNTL
+
+	jmp (PNTL)		;Jump into device function
+
+HANPOST:
+	lda DCODE
+	and #%111000
+	lsr a
+	lsr a
+	tax
+	lda POSTH,X
+	sta DEVL
+	lda POSTH+1,X
+	sta DEVH
+
+	lda DCODEL
+	asl a
+	tay
+	lda (DEVL),Y
+	sta PNTL
+	iny
+	lda (DEVL),Y
+	sta PNTH
+
+	jmp (PNTL)
+;HANREQ:
+;	lda DCODEH
+;	asl a
+;	tax
+;	lda HDEVIC,X
+;	sta DEVL
+;	lda HDEVIC+1,X
+;	sta DEVH
+;
+;	lda DCODE
+;	asl a
+;	tay
+;	lda OCODE
+;	asl a
+;	clc
+;	adc (DEVL),Y
+;	sta PNTL
+;	iny
+;	lda (DEVL),Y
+;	adc #$00
+;	sta PNTH
+;	ldy #$00
+;	lda (PNTL),Y
+;	pha
+;	iny
+;	lda (PNTL),Y
+;	sta PNTH
+;	pla
+;	sta PNTL
+;
+;	lda PNTL
+;	jmp (PNTL)
+
+;
+;Read IOT opcode (low 8 bits) off latch
+;
+READOP:
+	ldx A7
+	jsr READD	;Opcode 3 bits and device code lower 5 bits
+	sta PNTL
+	pha
+
+	and #%111
+	sta OCODE	;Device control code
+
+	pla
+	lsr a
+	lsr a
+	lsr a
+	and #%00011111
+	sta DCODE
+	and #%111
+	sta DCODEL
+
+	ldx A8
+	jsr READD
+	and #$0F
+	sta PNTH	;Device code upper bit and opcode
+	pha
+
+	lda #$00
+	lsr PNTH
+	rol a
+	rol a
+	rol a
+	rol a
+	rol a
+	rol a
+	ora DCODE
+	sta DCODE	;Device selection
+
+	pla
+	sta PNTH
+
+	lda TRACE
+	beq NOTR
+	jsr CRLF
+	ldx #DCODE
+	jsr PROC8
+	lda #':'
+	jsr OUTCH
+	lda OCODE
+	jsr OCTDIG
+	NOTR:
+	rts
+
+;READOP:
+;	ldx A7
+;	jsr READD	;Opcode 3 bits and device code lower 5 bits
+;	sta PNTL
+;	pha
+;
+;	and #%111
+;	sta OCODE	;Device control code
+;
+;	pla
+;	lsr a
+;	lsr a
+;	lsr a
+;	and #%111
+;	sta DCODE	;Device code lower 3 bits
+;
+;	ldx A8
+;	jsr READD
+;	and #$F
+;	sta PNTH	;Device code upper bit and control code
+;	pha
+;
+;	lda TRACE
+;	beq NOTR
+;	jsr CRLF
+;	ldx #PNTL
+;	jsr PROC12
+;NOTR:
+;	lda PNTL
+;	lsr PNTH	;Shift device MSB into carry
+;	rol a		
+;	rol a
+;	rol a
+;	and #$7
+;	sta DCODEH	;Device code
+;
+;	pla			;Restore PNTH
+;	sta PNTH
+;	rts
+
+;
+;Wait for XTC to go low then set 6100 running at full speed
+;
+WATXTC:
+	ldx XTC
+	jsr READD
+	bit XTC+1
+	beq JGO
+	jsr CLOCK
+	jmp WATXTC
+JGO:
+	jmp GORUN
+;
+;Wait for XTC and DEVSEL to go low
+;
+WXTDVS:
+	ldx XTC
+	jsr READD
+	bit XTC+1
+	bne WXT2
+
+	ldx DEVSEL
+	jsr READD
+	bit DEVSEL+1
+	bne WXT2
+
+	rts
+WXT2:
+	jsr CLOCK
+	jmp WXTDVS
+;
+;Set SKP line high
+;
+SKPHI:
+	ldx SKP
+	lda SKP+1
+	pha
+	jsr OUTPUT
+	pla
+	jmp OUTBH
+;
+;Flip flop clock
+;
+CLOCK:
+	ldx CKLN
+	lda BASE,X
+	eor CKLN+1
+	sta BASE,X
+	rts
+;
+;Clear INTREQ (set high)
+;
+CLRINT:
+	ldx INTREQ
+	lda INTREQ+1
+	jmp OUTBH
+;
+;Clean things up and set 6100 loose
+;
+GORUN:
+	ldx D7
+	lda #$FF
+	jsr INPUT
+
+	ldx D11
+	lda D11+1
+	ora D11+3
+	ora D11+5
+	ora D11+7
+	jsr INPUT
+
+	ldx SKP
+	lda SKP+1
+	jsr INPUT
+
+	ldx C0
+	lda C0+1
+	ora C1+1
+	ora C2+1
+	jsr INPUT
+
+	lda STATE
+	bne WDEV0
+LABL:
+	jsr CLOCK
+
+	ldx DEVSEL
+	jsr READD
+	bit DEVSEL+1
+	bne LABL
+WDEV0:
+	lda #0
+	sta STATE
+WDEV:
+	jsr CLOCK
+
+	ldx DEVSEL
+	jsr READD
+	bit DEVSEL+1
+	beq WDEV
+FULLSP:
+	ldx RUNSTP
+	lda RUNSTP+1
+	jsr OUTBH
+
+	jmp HANIOT
+;
+;Read data for an outout IOT
+;
+READPD:
+	lda OCODE
+	and #%100
+	beq WATJMP
+
+	lda #$01
+	sta STATE
+	jsr WXTDVS
+	ldx D7
+	jsr READD
+	pha
+U1:
+	lda ACIA_Status
+	and #ACIA_Flag_TX		;Test if transmitter buffer is empty (TBMT on original UART)
+	beq U1
+	pla
+	and #$7F
+	sta ACIA_Data
+	jsr CLRINT
+	jmp GORUN
+;
+WATJMP:
+	jmp WATXTC
+;
+;Clear a device flag
+;
+CLEARF:
+	ldx DCODEL
+	lda #0
+	sta FLAGS,X
+	rts
+;
+;KSF IOT (keyboard skip flag)
+;
+KSF:
+	ldx DCODEL
+	lda ACIA_Status
+	and #ACIA_Flag_RX		;Test if receiver data is available (RDA on original UART)
+	beq KSF0
+KSF1:
+	lda #$01
+	bne SKIPEX
+KSF0:
+	lda #$00
+;
+SKIPEX:
+	sta FLAGS,X
+	beq NOSKIP
+;
+STSKIP:
+	ldx SKP
+	lda SKP+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+;
+SC0C2H:				;Set C0-C2 high
+	ldx C0
+	ldy #$04
+	lda #$00
+HIGHST:
+	ora C0+1,Y
+	dey
+	dey
+	bpl HIGHST
+	pha
+	jsr OUTPUT
+	pla
+	jmp OUTBH
+;
+NOSKIP:
+	jsr SKPHI
+	jmp SC0C2H
+;
+;TSF IOT (teleprinter skip flag)
+;
+TSF:
+	ldx DCODEL
+	lda ACIA_Status
+	and #ACIA_Flag_TX		;Test if transmitter buffer is empty (TBMT on original UART)
+	beq KSF0
+	bne KSF1
+;
+;KRB IOT (keyboard read buffer)
+;
+KRB:
+	jsr KCC
+;
+;KRS IOT (keyboard read static)
+;The 8-bit character in the keyboard buffer is ORed with the accumulator
+;
+KRS:
+	jsr SKPHI
+	ldx C0
+	lda C0+1
+	ora C1+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+
+	ldx C2
+	lda C2+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBH
+
+	lda ACIA_Data
+	ora #$80
+	pha
+
+	ldx D7
+	lda #$FF
+	jsr OUTPUT
+	pla
+	sta BASE,X
+
+	ldx D11
+	lda D11+1
+	ora D11+3
+	ora D11+5
+	ora D11+7
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+
+	jsr CLRINT
+
+	rts
+;
+;TLS IOT (teleprinter load select)
+;
+TLS:
+	jsr TCF
+;
+;TPC IOT (teleprinter print character)
+;
+TPC:
+	lda #0
+	sta PFLAG
+	jmp SC0C2H
+;
+;KCC IOT (keyboard clear character)
+;
+KCC:
+	jsr SC0C2H
+	ldx C0
+	lda C0+1
+	jsr OUTBL
+	jsr SKPHI
+	jmp CLEARF
+;
+;TCF IOT (teleprinter clear flag)
+;
+TCF:
+	jsr SC0C2H
+	jsr SKPHI
+	jmp CLEARF
+;
+;ION IOT (interrupts on)
+;
+ION:
+	lda #$01
+	sta INTFLG
+	jsr CLRINT
+	jmp NOSKIP
+;
+;IOF IOT (interrupts off)
+;
+IOF:
+	lda #$00
+	sta INTFLG
+	jsr CLRINT
+	jmp NOSKIP
+;
+;IOT tables:
+;-----------
+;
+NOPX=NOSKIP
+;
+;Table of device tables
+;
+HDEVIC:
+	.word DEVICE
+	.word NULL
+	.word NULL
+	.word NULL
+	.word NULL
+	.word NULL
+	.word NULL
+	.word NULL
+;
+;Device table 0
+;
+DEVICE:
+	.word INTERU
+	.word NONE
+	.word NONE
+	.word KEYB
+	.word PRIN
+	.word NONE
+	.word NONE
+	.word NONE
+;
+;NULL device table
+;
+NULL:
+	.word NONE
+	.word NONE
+	.word NONE
+	.word NONE
+	.word NONE
+	.word NONE
+	.word NONE
+	.word NONE
+;
+;Dummy device OP table
+;
+NONE:
+	.word NOPX
+	.word NOPX
+	.word NOPX
+	.word NOPX
+	.word NOPX
+	.word NOPX
+	.word NOPX
+	.word NOPX
+;
+;Keyboard OP table
+;
+KEYB:
+	.word NOPX
+	.word KSF
+	.word KCC
+	.word NOPX
+	.word KRS
+	.word NOPX
+	.word KRB
+	.word NOPX
+;
+;Printer OP table
+;
+PRIN:
+	.word NOPX
+	.word TSF
+	.word TCF
+	.word NOPX
+	.word TPC
+	.word NOPX
+	.word TLS
+	.word NOPX
+;
+;Interrupt OP table
+;
+INTERU:
+	.word NOPX
+	.word ION
+	.word IOF
+	.word NOPX
+	.word NOPX
+	.word NOPX
+	.word NOPX
+	.word NOPX
+;
+;Device flags
+;
+FLAGS:
+	.byte 0
+	.byte 0
+	.byte 0
+	.byte 0
+	.byte 0
+	.byte 0
+	.byte 0
+	.byte 0
+;
+;Table of what to do after HANREQ tables
+;
+POSTH:
+	.word POSTMS
+	.word NULLM
+	.word NULLM
+	.word NULLM
+	.word NULLM
+	.word NULLM
+	.word NULLM
+	.word NULLM
+;
+;NULL what to do after HANREQ table
+;
+NULLM:
+	.word WATXTC
+	.word WATXTC
+	.word WATXTC
+	.word WATXTC
+	.word WATXTC
+	.word WATXTC
+	.word WATXTC
+	.word WATXTC
+;
+;What to do after HANREQ table 0
+;
+POSTMS:
+	.word WATXTC
+	.word WATXTC
+	.word WATXTC
+	.word WATXTC
+	.word READPD
+	.word WATXTC
+	.word WATXTC
+	.word WATXTC

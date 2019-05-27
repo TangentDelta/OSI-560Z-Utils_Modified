@@ -1,0 +1,1585 @@
+;Utility defines
+TMP=$0
+FLP=$1
+FLAG=$2
+PNTL=$3
+PNTH=$4
+YSAVE=$5
+DSTL=$6
+DSTH=$7
+SRCSL=$8
+SRCSH=$9
+SRCEL=$A
+SRCEH=$B
+TEMP=$C
+OCTAL=$D
+OCTAH=$E
+OCTDL=$F
+OCTDH=$10
+HIGH=$11
+HIGHER=$12
+TMPA=$13
+TIMEL=$14
+TIMEH=$15
+DELAYL=$16
+DELAYH=$17
+BITPAT=$18
+NOTBPT=$19
+;
+FIELD=$27
+;
+;Change the line below based on your 560Z setup.
+;The default PIA base address of the 560Z is $F000
+BASE=$B000	;560Z PIA base address
+;
+;Change the line below based on your 560Z setup.
+;This value is the upper byte of the 560Z's address.
+;The default 560Z address is $E000.
+BLOC=$A0	;Board base address. 4K window
+;
+;Defines for optional auxiliary ACIA
+;
+ACIA6551 = $9400
+ACIA6551_Data = ACIA6551
+ACIA6551_Status = ACIA6551+1
+ACIA6551_Command = ACIA6551+2
+ACIA6551_Control = ACIA6551+3
+;
+;Defines for standard OSI 502/510 6850 ACIA
+;
+ACIA6850	= $FC00
+ACIA6850_Data	= ACIA6850+1
+ACIA6850_Control	= ACIA6850 
+;
+;Change the line below to set the ACIA to use with this driver package.
+;1 = use an auxiliary 6551 ACIA
+;2 = use the OSI 502/510's built-in ACIA
+ACIA = 2
+;
+;Defines for which ACIA to use
+;
+.if ACIA = 1
+	ACIA_Status = ACIA6551_Status
+	ACIA_Data = ACIA6551_Data
+	ACIA_Flag_TX = $10
+	ACIA_Flag_RX = $08
+.elseif ACIA = 2
+	ACIA_Status = ACIA6850_Control
+	ACIA_Data = ACIA6850_Data
+	ACIA_Flag_TX = $02
+	ACIA_Flag_RX = $01
+.else
+	.fatal "ACIA selection is not valid!"
+.endif
+
+.import Z80IO,I61IO,SWREG,TRACE
+.export READD,INPUT,OUTPUT,OUTBL,OUTBH,RUNSTP,CKLN,D7,A7,Z80WR,IORQ,INCH,OUTCH,DIGIT,CRLF,ZTRACE
+.export READD,INPUT,OUTPUT,OUTBL,OUTBH,CRLF,PROC12,PROC8,OCTDIG,RUNSTP,CKLN,INTREQ,SWSEL,A8,D7,A7,DEVSEL,C0,C1,C2,SKP,XTC,D11,BYTE,OUTCH
+
+.segment "UTIL"
+START:
+	.if ACIA = 1		;Init auxiliary ACIA if enabled
+		LDA #$1E        ;* Init ACIA to 9600 Baud.
+		STA ACIA6551_Control
+		LDA #$0B        ;* No Parity.
+		STA ACIA6551_Command
+	.endif
+
+	lda #0
+	sta TRACE
+	sta FLAG
+	sta FIELD
+CLEAR:
+	ldx #0
+	jsr INIT
+	cpx #$10
+	bne CLEAR+2
+	jsr PRESET
+	lda CKLN+1
+	jsr OUTPUT
+	ldy #100
+	lda BASE,X
+CKCLR:
+	eor CKLN+1
+	sta BASE,X
+	dey
+	bne CKCLR
+	lda CKLN+1
+	jsr INPUT
+PROMPT:
+	jsr CRLF
+	lda #'Z'
+	jsr OUTCH
+	lda #':'
+	jsr OUTCH
+	jsr INCH	;Input a command
+	cmp #'C'	;C=Clear				<------Modify to support lower-case chars?
+	beq CLEAR
+	cmp #'P'	;P=Print
+	bne NXT1
+PRINT:
+	ldx #$00
+	stx FLP
+	PRINT_1:
+	jsr CRLF
+	txa
+	pha
+	lsr a
+	lsr a
+	jsr DIGIT
+	lda FLP
+	bne B
+	lda #'A'
+	jsr OUTCH
+	inc FLP
+	bne PR1
+	B:
+	lda #'B'
+	jsr OUTCH
+	dec FLP
+	PR1:
+	lda #' '
+	jsr OUTCH
+	lda #'D'
+	jsr OUTCH
+	lda #'I'
+	jsr OUTCH
+	lda #'R'
+	jsr OUTCH
+	lda #' '
+	jsr OUTCH
+	jsr RDDR
+	jsr BINARY
+	jsr CRLF
+	lda #' '
+	jsr OUTCH
+	jsr OUTCH
+	jsr OUTCH
+	lda #'D'
+	jsr OUTCH
+	lda #'A'
+	jsr OUTCH
+	lda #'T'
+	jsr OUTCH
+	lda #' '
+	jsr OUTCH
+	pla
+	tax
+	pha
+	jsr READD
+	jsr BINARY
+	pla
+	clc
+	adc #$02
+	tax
+	cpx #$10
+	bne PRINT_1
+	jmp PROMPT
+NXT1:
+	cmp #'S'	;S=Set
+	bne NXT2
+	jsr NAMEX
+	stx TMP
+	jsr BITS
+	pha
+	jsr INCH
+	ldx TMP
+	cmp #'I'
+	bne N1
+	pla
+	jsr INPUT
+	jmp PROMPT
+	N1:
+	cmp #'H'
+	bne N2
+	pla
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBH
+	jmp PROMPT
+	N2:
+	cmp #'L'
+	bne N3
+	pla
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+	jmp PROMPT
+	N3:
+	pla
+	ERR:
+	jmp ERROR
+NXT2:
+	cmp #'E'	;E=Exit
+	bne NXT3
+	jmp EXIT
+NXT3:
+	cmp #'F'	;F=Fetch
+	bne NXT4
+	ldx #PNTL
+	jsr BUILD
+	lda #1
+	sta FLAG
+	jmp PROMPT
+NXT4:
+	cmp #'L'	;L=Learn
+	bne NXT5
+	ldx #PNTL
+	jsr BUILD
+	ldy #0
+	NEXT:
+	jsr INCH
+	cmp #$D
+	bne CHAR
+	jsr CRLF
+	jmp NEXT
+	CHAR:
+	cmp #'$'
+	bne GOAHEA
+	tya
+	clc
+	adc PNTL
+	sta PNTL
+	bcc NOC
+	inc PNTH
+	NOC:
+	lda PNTH
+	jsr BYTE
+	jmp PROMPT
+	GOAHEA:
+	sta (PNTL),Y
+	iny
+	bne NEXT
+	inc PNTH
+	jmp NEXT
+NXT5:
+	cmp #'X'	;X=Exit fetch mode
+	bne NXT6
+	lda #0
+	sta FLAG
+	jmp PROMPT
+NXT6:
+	cmp #'M'	;M=Move
+	bne NXT7
+	jsr INCH
+	cmp #'F'
+	bne T
+	jsr PARM3
+	ldx #2
+	jsr MOVE
+	jmp PROMPT
+	T:
+	cmp #'T'
+	bne I
+	jsr PARM3
+	ldx #0
+	jsr MOVE
+	jmp PROMPT
+	I:
+	cmp #'I'
+	bne JMPERR
+	jsr PARM3
+	jsr MOVE12
+	jmp PROMPT
+	JMPERR:
+	jmp ERROR
+NXT7:
+	cmp #'#'	;#=Open
+	bne NXT8
+	jsr CRLF
+	ldy #6
+	ldx #OCTAL
+	jsr INOCTA
+	SHOWER:
+	lda #'/'
+	jsr OUTCH
+	SHOW:
+	jsr READO
+	ldx #OCTDL
+	jsr PROC12
+	lda #' '
+	jsr OUTCH
+	SCMD:
+	jsr INCH
+	cmp #$D
+	beq GOPROM
+	cmp #'/'
+	beq SHOW
+	cmp #' '
+	bne MUSTBE
+	inc OCTAL
+	bne NCR1
+	inc OCTAH
+	NCR1:
+	jsr CRLF
+	ldx #OCTAL
+	jsr PROC16
+	jmp SHOWER
+	MUSTBE:
+	pha
+	ldx #OCTDL
+	ldy #4
+	lda #0
+	sta 0,X
+	sta 1,X
+	lda #3
+	sta TEMP
+	pla
+	jsr DIGO_1
+	jsr NXR_1
+
+	lda #' '
+	jsr OUTCH
+	jsr WRITEO
+	jmp SCMD
+	GOPROM:
+	jmp PROMPT
+NXT8:
+	cmp #'K'	;K=Clock
+	bne NXT9
+	jsr INCH
+	cmp #'H'
+	bne LOWQ
+	jsr SINGCY
+	ldx CKLN
+	lda CKLN+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBH
+	jmp PROMPT
+	LOWQ:
+	cmp #'L'
+	bne ERRJ
+	jsr SINGCY
+	ldx CKLN
+	lda CKLN+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+	jmp PROMPT
+ERRJ:
+	jmp ERROR
+NXT9:
+	cmp #'R'	;R=Run
+	bne NXT10
+	jsr INCH
+	cmp #'I'
+	bne RUNNXT
+	jmp ISTEP
+	RUNNXT:
+	cmp #'Z'
+	bne ERRJ
+	jmp ZSTEP	;Custom stepping/tracing routine
+NXT10:
+	cmp #'B'	;B=Bin loader
+	bne NXT11
+	ldx #DSTL
+	jsr BUILD
+	jsr BINLDR
+	jmp PROMPT
+NXT11:
+	cmp #'W'	;W=W-switch set
+	bne NXT12
+	ldy #4
+	ldx #PNTL
+	jsr INOCTA
+	lda PNTL
+	sta SWREG
+	lda PNTH
+	sta SWREG+1
+	jmp PROMPT
+NXT12:
+	cmp #'Z'	;Z=Z80 IN/OUT
+	bne NXT13
+	jmp Z80IO
+NXT13:
+	cmp #'I'	;I=I6100 IOT
+	bne NXT14
+	jmp I61IO
+NXT14:
+	cmp #'T'	;T=Trace IOTs
+	bne NXT15
+	lda #$01
+	sta TRACE
+	jmp PROMPT
+NXT15:
+	cmp #'G'	;G=Go
+	beq GYES
+	jmp NXT16
+	GYES:
+	jsr INCH
+	cmp #'Z'	;Z? Start Z80 execution
+	bne IQUEST
+
+	ldx #PNTL
+	jsr BUILD
+	;Attach the 4K window to the MOS bus for the purposes of loading an initial JP instruction
+	ldx MMENAB		;Enable memory management
+	lda MMENAB+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+
+	ldx MM12		;Set upper 4 bits low
+	lda MM12+1
+	ora MM12+3
+	ora MM12+5
+	ora MM12+7
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+	;Set up initial Z80 jump
+	lda #$C3	;Z80 JP instruction
+	sta BLOC*$100
+	lda PNTL
+	sta BLOC*$100+1
+	lda PNTH
+	sta BLOC*$100+2
+
+	ldx MMENAB		;Disable memory management
+	lda MMENAB+1
+	jsr OUTBH
+
+	nop				;Let digital logic settle down
+	nop
+	nop
+
+	ldx CNPIA1		;Set Z80 as SYS bus master
+	lda CNPIA1+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+
+	lda TRACE		;Set up Z80 to single-step if tracing
+	beq FREZ80
+	
+	jsr SINGCY		;Set RUN/STEP low to enter step mode	
+
+	FREZ80:
+	ldx Z80RST		;Set Z80 running free
+	lda Z80RST+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+
+	lda TRACE		;Enter slow stepping mode if tracing Z80
+	beq GZEND
+	jsr CRLF
+	jmp ZSTEP
+	GZEND:
+	jmp PROMPT
+	IQUEST:
+	cmp #'I'	;I? Start I6100 execution
+	beq IYES
+	jmp ERROR
+	IYES:
+	ldx #OCTDL	;Get start address and store it in OCTDL
+	ldy #$04
+	jsr INOCTA
+
+	lda FIELD
+	ora #%1111
+	sta OCTAH
+	lda #$FE
+	sta OCTAL
+	jsr WRITEO	;Write OCTDL,OCTDH into (OCTAL,OCTAH)
+
+	lda #%1011	;5776 (Base 8)
+	sta OCTDH	;6100 JMP I instruction
+	lda #%11111110
+	sta OCTDL
+	inc OCTAL
+	jsr WRITEO	;Write OCTDL,OCTDH into (OCTAL,OCTAH)
+
+	lda FIELD	;Set up MM lines
+	jsr SETHI
+
+	ldx D11		;Set up data lines
+	jsr INIT
+
+	ldx CNPIA1	;Select I6100 as SYS master
+	lda CNPIA1+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBH
+
+	ldx CNPIA2	;Select I6100 as SYS master
+	lda CNPIA2+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+
+	ldx I61RST	;Reset I6100
+	lda I61RST+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+
+	ldx INTREQ	;Clear I6100 interrupt
+	lda INTREQ+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBH
+
+	lda TRACE	;Single-step I6100 if in trace mode
+	beq FREI6
+
+	jsr SINGCY
+
+	FREI6:
+	ldx I61RHT	;Toggle I6100 RUN/HALT 
+	lda I61RHT+1
+	pha
+	jsr OUTPUT
+	pla
+	pha
+	jsr OUTBL
+	pla
+	jsr OUTBH
+
+	jmp PROMPT
+NXT16:
+	cmp #'H'	;H=High 4 bits
+	beq HYES
+	jmp NXT17
+	HYES:
+	jsr ONED
+	asl	a
+	asl a
+	asl a
+	asl a
+	sta FIELD
+	jmp PROMPT
+NXT17:
+	cmp #'N'	;N=New commands
+	beq NYES
+	jmp ERROR
+	NYES:
+	jsr INCH
+	cmp #'M'	;M - Set memory management bits for MOS access
+	beq NMYES
+	jmp NMNO
+	NMYES:
+	lda #$00
+	jsr SETHI
+	jmp PROMPT
+	NMNO:
+	cmp #'H'	;H - Halt I6100
+	beq NHYES
+	jmp PROMPT
+	NHYES:
+	ldx I61RHT	;Reset I6100
+	lda I61RHT+1
+	pha
+	jsr OUTPUT
+	pla
+	pha
+	jsr OUTBL
+	pla
+	jsr OUTBH
+	jmp PROMPT
+
+INCH:
+	lda FLAG
+	bne FILE
+	jmp INCHER
+FILE:
+	sty YSAVE
+	ldy #0
+	lda (PNTL),Y
+	inc PNTL
+	bne NOCARY
+	inc PNTH
+NOCARY:
+	ldy YSAVE
+	jmp OUTCH
+EJMPER:
+	jmp ERROR
+;Write OCTDL,OCTDH into (OCTAL,OCTAH)
+WRITEO:
+	lda OCTAH
+	jsr SETHI	;Set memory management bits
+
+	lda OCTDH
+	sta TMP
+	lda #4
+	sta TMPA
+	d11_offset=D11-MM15+6
+	ldy #d11_offset
+	jsr COPY
+	lda OCTAH
+	pha
+	and #$F
+	ora #BLOC
+	sta OCTAH
+	lda OCTDL
+	ldy #0
+	sta (OCTAL),Y
+	pla
+	sta OCTAH
+	CLRINP:
+	lda #0
+	ldy #6
+	SETR:
+	ora D11,Y
+	dey
+	dey
+	bpl SETR
+	ldx D11+1
+	jmp INPUT
+;Read (OCTAL,OCTAH) contents into OCTDL,OCTDH
+READO:
+	lda OCTAH
+	jsr SETHI
+	lda OCTAH
+	pha
+	and #$f
+	ora #BLOC
+	sta OCTAH
+	ldy #0
+	lda (OCTAL),Y
+	sta OCTDL
+	pla
+	sta OCTAH
+	ldx D12
+	jsr READD
+	sta OCTDH
+	lda D12+1
+	RL:
+	lsr a
+	bcs OUTR
+	lsr OCTDH
+	jmp RL
+	OUTR:
+	rts
+;BIN loader for 6100
+;(DSTL,DSTH) is the base address to the 8K block
+;Supports no field changes (4K memory only)
+;Prints "FLD" on any field change and then exits
+BINLDR:
+	lda #0		;Clear high pointer
+	sta PNTH
+
+	lda DSTL
+	sta OCTAL
+	lda DSTH
+	sta OCTAH
+	BINL0:
+	lda #'.'
+	jsr OUTCH
+	jsr REDCHR	;Skip through leader
+	cmp #$80
+	beq BINL0
+	bne BINL1A
+
+	BINL1:
+	LDA #0
+	sta PNTH
+	jsr REDCHR
+	BINL1A:
+	bit SC0		;Skip special case checking if upper two bits are 0
+	beq DATAFD
+
+	bit S80		;Stop data entry if trailer is encountered
+	bne FIELDQ
+
+	pha
+	lda #'!'
+	jsr OUTCH
+	pla
+	
+	jsr TWELV	;Change data field
+	asl a		;Address*2
+
+	sta OCTAL
+	stx OCTAH
+	rol OCTAH
+
+	lda DSTL	;Add offset
+	clc
+	adc OCTAL
+	sta OCTAL
+
+	lda DSTH
+	adc OCTAH
+	sta OCTAH
+	jmp BINL1
+	FIELDQ:
+	bit S40		;?
+	beq END
+
+	lda #'F'
+	jsr OUTCH	;Print FLD
+	lda #'L'
+	jsr OUTCH
+	lda #'D'
+	jsr OUTCH
+	END:
+	rts
+	DATAFD:		;Load data into field
+	jsr TWELV
+	ldy #00
+	sta (OCTAL),Y
+
+	iny
+	txa
+	sta (OCTAL),Y
+
+	lda #02
+	clc
+	adc OCTAL
+	sta OCTAL
+	bcc BINL1
+
+	inc OCTAH
+	jmp BINL1
+	TWELV:		;Load high 6 bits into X and low 6 bits into A
+	asl a		;Shift high 6 bits into position
+	asl a
+	ldx #4
+	TW1:
+	asl a		;Shift raw data into high pointer
+	rol PNTH
+	dex
+	bne TW1
+
+	sta PNTL
+	jsr REDCHR
+	ora PNTL
+	ldx PNTH
+
+	rts
+	S40:	.byte $40
+	S80:	.byte $80
+	SC0:	.byte $C0
+;Initializes a given PIA (Indexed by X)
+;Sets A and B as inputs
+INIT:
+	ldy #$02
+	IN1:
+	lda #$00
+	sta BASE+1,X
+	sta BASE,X
+	lda #$04
+	sta BASE+1,X
+	inx
+	inx
+	dey		;Do sides A and B
+	bne IN1
+	rts
+;Read data register into AC (PIA indexed by X)
+READD:
+	lda BASE,X
+	rts
+;Read the data direction register into AC (PIA indexed by X)
+RDDR:
+	lda #$00
+	sta BASE+1,X
+	lda BASE,X
+	pha
+	lda #$04
+	sta BASE+1,X
+	pla
+	rts
+;Set a particular bit as an input based on bits set in AC (PIA indexed by X)
+INPUT:
+	pha
+	lda #$00
+	sta BASE+1,X
+	pla
+	eor #$FF
+	and BASE,X
+	sta BASE,X
+	lda #$04
+	sta BASE+1,X
+	RTS
+;Check if a bit is set in PIA indexed by X
+;Z=1 if not set // Z=0 if set
+;AC had bit of interest set
+ISSET:
+	and BASE,X
+	rts
+;Set a particular bit as an output based on bits set in AC (PIA indexed by X)
+OUTPUT:
+	pha
+	lda #0
+	sta BASE+1,X
+	pla
+	ora BASE,X
+	sta BASE,X
+	lda #4
+	sta BASE+1,X
+	rts
+;Output a low bit pattern to PIA from AC (PIA indexed by X)
+OUTBL:
+	eor #$FF
+	and BASE,X
+	sta BASE,X
+	rts
+;Output a high bit pattern to PIA from AC (PIA indexed by X)
+OUTBH:
+	ora BASE,X
+	sta BASE,X
+	rts
+;Set single cycle mode
+SINGCY:
+	ldx RUNSTP
+	lda RUNSTP+1
+	pha
+	jsr OUTPUT
+	pla
+	jmp OUTBL
+;Input a name specifying an 8-bit PIA port (1 of 8 possible) and calculate X index for it
+NAMEX:
+	jsr INCH
+	cmp #'0'
+	bmi ERROR
+	cmp #'4'
+	bpl ERROR
+	and #%11
+	asl a
+	asl a
+	tax
+	jsr INCH
+	cmp #'A'
+	beq DONE
+	cmp #'B'
+	bne ERROR
+	inx
+	inx
+	DONE:
+	rts
+;Input a bit number and set it in AC
+BITS:
+	jsr INCH
+	cmp #'0'
+	bmi ERROR
+	cmp #'8'
+	bpl ERROR
+	and #%111
+	tax
+	inx
+	lda #0
+	sec
+	LOOP:
+	rol a
+	dex
+	bne LOOP
+	rts
+;Error trap
+ERROR:
+	lda #'?'
+	jsr OUTCH
+	jsr OUTCH
+	jmp PROMPT
+;Output a return/linefeed
+CRLF:
+	pha
+	lda #$0D
+	jsr OUTCH
+	lda #$0A
+	jsr OUTCH
+	pla
+	rts
+;Print the binary number in AC
+BINARY:
+	ldy #$08
+	BIN1:
+	asl
+	tax
+	bcc ZERO
+	lda #'1'
+	jsr OUTCH
+	jmp BIN2
+	ZERO:
+	lda #'0'
+	jsr OUTCH
+	BIN2:
+	txa
+	dey
+	bne BIN1
+	rts
+;Print page 0 indexed by X as 16 bit octal
+PROC16:
+	lda 1,X
+	rol a
+	rol a
+	and #%1
+	jsr OCTDIG
+	lda 1,X
+	lsr a
+	lsr a
+	lsr a
+	lsr a
+	jsr OCTDIG
+;Print page 0 indexed by X as 12 bit octal
+PROC12:
+	lda 1,X
+	lsr a
+	jsr OCTDIG
+	lda 0,X
+	lsr a
+	sta TEMP
+	lda 1,X
+	lsr a
+	lda TEMP
+	bcc PR1X
+	ora #$80
+	PR1X:
+	lsr a
+	lsr a
+	lsr a
+	lsr a
+	lsr a
+	jsr OCTDIG
+	lda 0,X
+	lsr a
+	lsr a
+	lsr a
+	jsr OCTDIG
+	lda 0,X
+;Print low 3 bit from AC as an octal digit
+OCTDIG:
+	and #%111
+	ora #'0'
+	jmp OUTCH
+;Print page 0 indexed by X as 8 bit octal
+PROC8:
+	lda 0,X
+	jmp PR1X
+;Input an N digit octal number (Y=N<=6)
+;X indexes to storage location low
+INOCTA:
+	lda #0
+	sta 0,X
+	sta 1,X
+	NXR:
+	lda #3
+	sta TEMP
+	jsr DIGOCT
+	NXR_1:
+	asl a
+	asl a
+	asl a
+	asl a
+	asl a
+	NXRA:	
+	asl a
+	rol 0,X
+	rol 1,X
+	dec TEMP
+	bne NXRA
+	dey
+	bne NXR
+	rts
+;Input 1 octal digit to low 3 bits of AC
+DIGOCT:
+	jsr INCH
+	DIGO_1:
+	cmp #'0'
+	bmi ERRJMP
+	cmp #'8'
+	bpl ERRJMP
+	and #%111
+	rts
+ERRJMP:
+	jmp ERROR
+;Input a 16 bit number to page 0
+;Indexed by X
+BUILD:
+	inx
+	jsr ONEB
+	dex
+	ONEB:
+	jsr ONED
+	asl a
+	asl a
+	asl a
+	asl a
+	sta 0,X
+	jsr ONED
+	ora 0,X
+	sta 0,X
+	rts
+	ONED:
+	jsr INCH
+	cmp #'0'
+	bmi ERRJMP
+	cmp #'8'	;???
+	bmi DIG1
+	cmp #'A'
+	bmi ERRJMP
+	cmp #'G'
+	bpl ERRJMP
+	sbc #6
+	DIG1:
+	and #$F
+	rts
+;Build 3 addresses
+PARM3:
+	ldx #DSTL
+	ldy #0
+	PA1:
+	jsr BUILD
+	lda SYNTA,Y
+	jsr OUTCH
+	iny
+	inx
+	inx
+	cpx #SRCEH+1
+	bne PA1
+	rts
+	SYNTA: .byte "=, "
+;Move a block of memory through 4K window
+;X=0 menas move from where to 560Z bus
+;X=2 means move from 560Z bus to here
+MOVE:
+	stx TEMP
+	jsr ENABM
+	lda SRCSH
+	sta HIGH
+	ldx TEMP
+	lda DSTH,X
+	sta HIGHER
+	jsr SETUP
+	DONEK:
+	sec
+	lda SRCEL
+	sbc SRCSL
+	lda SRCEH
+	sbc HIGH
+	bcc ENDER
+	ldy #0
+	lda (SRCSL),Y
+	sta (DSTL),Y
+	inc SRCSL
+	bne NC1
+	inc HIGH
+	inc SRCSH
+	ldx TEMP
+	cmp #2
+	bne NC1
+	inc HIGHER
+	jsr SETUP
+	NC1:
+	inc DSTL
+	bne DONEK
+	inc DSTH
+	ldx TEMP
+	bne DONEK
+	inc HIGHER
+	jsr SETUP
+	jmp DONEK
+	ENDER:
+	rts
+;Move block of uncompressed 12 bit numbers
+MOVE12:
+	lda DSTL
+	sta OCTAL
+	MOVEA:
+	lda DSTH
+	and #$f
+	ora #BLOC
+	sta OCTAH
+	lda DSTH
+	jsr SETHI
+	MOV1:
+	sec
+	lda SRCEL
+	sbc SRCSL
+	lda SRCEH
+	sbc SRCSH
+	bcc ENDER2
+	ldy #1
+	lda (SRCSL),Y
+	sta TMP
+	lda #4
+	sta TMPA
+	;d11_offset=D11-MM15+6
+	ldy #d11_offset
+	jsr COPY
+	ldy #0
+	lda (SRCSL),Y
+	sta (OCTAL),Y
+	lda #2
+	clc
+	adc SRCSL
+	sta SRCSL
+	bcc CRYC1
+	inc SRCSH
+	CRYC1:
+	inc OCTAL
+	bne MOV1
+	inc DSTH
+	inc OCTAH
+	jmp MOVEA
+	ENDER2:
+	jmp CLRINP
+;Set high 4 bits of address=AC using MMUX
+SETHI:
+	jsr HIGH4
+	ENABM:
+	ldx MMENAB
+	lda MMENAB+1
+	pha
+	jsr OUTPUT
+	pla
+	jmp OUTBL
+;Set up high 4 bits of address
+HIGH4:
+	lsr a		;Shift upper 4 bits into ready position
+	lsr a
+	lsr a
+	lsr a
+	ldy #4		;Y=number of bits to shift
+	sty TMPA	;Bit shift counter
+	sta TMP		;Memory map
+	ldy #6		;PIA bit counter
+	COPY:
+	ldx MM15,Y	;Load PIA bit assignment from table
+	iny
+	lda MM15,Y
+	lsr TMP		;Shift memory map LSB into C
+	bcc CLR		
+
+	pha
+	jsr OUTPUT	;Set PIA pin as output
+	pla
+	jsr OUTBH	;Set PIA pin high
+
+	jmp INLP
+	CLR:		;Memory map bit is low
+	pha
+	jsr OUTPUT	;Set PIA pin as output
+	pla
+	jsr OUTBL	;Set PIA pin low
+	INLP:
+	dey			;Undo increment from PIA bit assignment load
+	dey			;Move to next PIA pin
+	dey
+	dec TMPA	;Decrement bit shift counter
+	bne COPY	;Continue if bit shift counter is not empty
+	rts
+
+SETUP:
+	lda HIGHER
+	jsr HIGH4
+	ldx TEMP
+	lda HIGHER
+	and #$f
+	ora #BLOC
+	sta DSTH,X
+	rts
+;PIA bit assignment table
+RUNSTP:	.byte $0E,$10
+CKLN:	.byte $0E,$04
+INTREQ:	.byte $0A,$01
+I61RHT:	.byte $08,$40	;These are reversed for some reason
+I61RST:	.byte $0E,$08	;These are reversed for some reason
+Z80RST:	.byte $0E,$40
+CNPIA2:	.byte $0E,$02
+CNPIA1:	.byte $0E,$01
+SWSEL:	.byte $0A,$20
+DATAF:	.byte $08,$04
+MEMSEL:	.byte $08,$10
+MM15:	.byte $02,$80
+MM14:	.byte $02,$40
+MM13:	.byte $02,$20
+MM12:	.byte $02,$10
+MMENAB:	.byte $02,$08
+A15:	.byte $04,$80
+A14:	.byte $04,$40
+A13:	.byte $04,$20
+A12:	.byte $04,$10
+A11:	.byte $04,$08
+A10:	.byte $04,$04
+A9: 	.byte $04,$02
+A8: 	.byte $04,$01
+D7: 	.byte $06,$80
+D6: 	.byte $06,$40
+D5: 	.byte $06,$20
+D4: 	.byte $06,$10
+D3: 	.byte $06,$08
+D2: 	.byte $06,$04
+D1: 	.byte $06,$02
+D0: 	.byte $06,$01
+A7: 	.byte $00,$80
+A6: 	.byte $00,$40
+A5: 	.byte $00,$20
+A4: 	.byte $00,$10
+A3: 	.byte $00,$08
+A2: 	.byte $00,$04
+A1: 	.byte $00,$02
+A0: 	.byte $00,$01
+LXMAR:	.byte $0A,$10
+DEVSEL:	.byte $0A,$80
+C0: 	.byte $0A,$08
+C1: 	.byte $0A,$04
+C2: 	.byte $0A,$02
+SKP:	.byte $08,$80
+XTC:	.byte $0A,$40
+IFETCH:	.byte $08,$20
+D15:	.byte $0C,$80
+D14:	.byte $0C,$40
+D13:	.byte $0C,$20
+D12:	.byte $0C,$10
+D11:	.byte $0C,$08
+D10:	.byte $0C,$04
+D9: 	.byte $0C,$02
+D8: 	.byte $0C,$01
+Z80RFS:	.byte $02,$01
+Z80MRQ:	.byte $08,$02
+Z80WR:	.byte $08,$01
+Z80BAK:	.byte $0E,$80
+M1: 	.byte $0E,$20
+INT:	.byte $02,$02
+IORQ:	.byte $02,$04
+CPSEL:	.byte $08,$08
+;Set a line as an output high
+OBH:
+	ldx RUNSTP,Y
+	iny
+	lda RUNSTP,Y
+	pha
+	jsr OUTPUT
+	pla
+	jmp OUTBH
+
+;Set a line as an output low
+OBL:
+	ldx RUNSTP,Y
+	iny
+	lda RUNSTP,Y
+	pha
+	jsr OUTPUT
+	pla
+	jmp OUTBL
+
+;Set up the predefined states of the PIAs
+RN=RUNSTP
+PRESET:
+	ldy #CNPIA1-RN
+	jsr OBH
+	ldy #CNPIA2-RN
+	jsr OBH
+	ldy #RUNSTP-RN
+	jsr OBH
+	ldy #INT-RN
+	jsr OBH
+	ldy #MMENAB-RN
+	jsr OBH
+	ldy #I61RHT-RN
+	jsr OBH
+	ldy #I61RST-RN
+	jsr OBH
+	ldy #INTREQ-RN
+	jsr OBH
+	ldx CKLN
+	rts
+;
+;
+;		+---------------+
+;		|SYSTEM ROUTINES|
+;		+---------------+
+;
+;
+;Read a character from the ACIA and echo it
+INCHER:
+jsr REDCHR
+cmp #$60	;Uppercase?
+bmi INCH_1	;If it is, skip conversion
+and #$5F	;Conver to upper-case character
+INCH_1:
+jsr OUTCH	;Echo character
+rts
+;Write a character to the ACIA
+OUTCH:
+pha
+putc_loop:
+lda ACIA_Status
+and #ACIA_Flag_TX
+beq putc_loop
+pla
+sta ACIA_Data
+rts
+EXIT:
+rts
+BYTE:	;Unknown use. Output a byte?
+pha
+and #$F0
+lsr
+lsr
+lsr
+lsr
+jsr DIGIT
+pla
+pha
+jsr DIGIT
+pla
+rts
+;Output a single hex digit
+DIGIT:
+pha
+and #$0F
+clc
+adc #$30
+cmp #$3A
+bcc out_hex1
+adc #$06
+out_hex1:
+jsr OUTCH
+pla
+clc
+rts
+;UART raw input
+REDCHR:
+lda ACIA_Status
+and #ACIA_Flag_RX
+beq REDCHR
+lda ACIA_Data
+rts
+;
+;Clear 8 characters on current line
+;
+CLRLINE:
+pha
+txa
+pha
+
+lda #$0D	;Carriage-return
+jsr OUTCH
+ldx #$08
+lda #' '	;Space character
+CLRLOOP:
+jsr OUTCH
+dex
+bne CLRLOOP
+
+lda #$0D	;Carriage-return
+jsr OUTCH
+
+pla
+tax
+pla
+rts
+
+
+STEPDLY:
+	lda TIMEH
+	sta DELAYH
+	DEL1A:
+	lda TIMEL
+	sta DELAYL
+	DEL2A:
+	dec DELAYL
+	bne DEL2A
+	dec DELAYH
+	bne DEL1A
+	rts
+
+ZTRACE:			;Trace Z-80 execution
+	jsr CRLF
+
+	ldy Z80WR
+	lda BASE,Y
+	and #$01
+	beq ZLDW
+	lda #'R'
+	jmp ZTRADD
+	ZLDW:
+	lda #'W'
+	ZTRADD:
+	jsr OUTCH
+
+	ldy A8
+	lda BASE,Y
+	jsr BYTE
+
+	ldy A0
+	lda BASE,Y
+	jsr BYTE
+
+	lda #':'
+	jsr OUTCH
+
+	ldy D0
+	lda BASE,Y
+	jsr BYTE
+	
+	rts
+
+ITRACE:			;Trace I6100 execution
+	;lda #$0D
+	;jsr OUTCH
+
+	ldy DATAF
+	lda BASE,Y
+	pha
+	and #$20
+	beq ITSKP1
+	lda #'F'
+	bne ITNXT1
+	ITSKP1:
+	lda #' '
+	ITNXT1:
+	jsr OUTCH
+
+	pla
+	pha
+	and #$04
+	beq ITSKP2
+	lda #'D'
+	bne ITNXT2
+	ITSKP2:
+	lda #' '
+	ITNXT2:
+	jsr OUTCH
+
+	pla
+	and #$10
+	bne ITSKP3
+	lda #'M'
+	bne ITNXT3
+	ITSKP3:
+	lda #' '
+	ITNXT3:
+	jsr OUTCH
+
+	ldy LXMAR
+	lda BASE,Y
+	pha
+	and #$10
+	beq ITSKP4
+	lda #'L'
+	bne ITNXT4
+	ITSKP4:
+	lda #' '
+	ITNXT4:
+	jsr OUTCH
+
+	pla
+	and #$40
+	beq ITSKP5
+	lda #'C'
+	bne ITNXT5
+	ITSKP5:
+	lda #' '
+	ITNXT5:
+	jsr OUTCH
+
+	lda #':'
+	jsr OUTCH
+	ldx D7
+	jsr READD
+	sta OCTDL
+	ldx D8
+	jsr READD
+	and #$0F
+	sta OCTDH
+	ldx #OCTDL
+	jsr PROC12
+
+	lda #'|'
+	jsr OUTCH
+	ldx A7
+	jsr READD
+	sta OCTDL
+	ldx A8
+	jsr READD
+	and #$0F
+	sta OCTDH
+	ldx #OCTDL
+	jsr PROC12
+
+	jsr CRLF
+
+	rts
+
+ISTEP:
+	lda #TIMEL
+	jsr BUILD
+
+	jsr CRLF
+
+	ldx CKLN
+	lda CKLN+1
+	sta BITPAT
+	jsr OUTPUT
+
+	lda BITPAT	;Calculate clock toggle
+	eor #$FF
+	sta NOTBPT
+
+	jsr ITRACE	;Output current bus state
+	IRUNLP:
+	jsr STEPDLY
+	jsr STEPDLY
+
+	ldx CKLN
+	lda NOTBPT	;Toggle clock
+	and BASE,X
+	sta BASE,X
+
+	jsr ITRACE	;Output current bus state
+
+	jsr STEPDLY
+	jsr STEPDLY
+
+	ldx CKLN
+	lda BITPAT	;Toggle clock
+	ora BASE,X
+	sta BASE,X
+
+	jsr ITRACE	;Output current bus state
+
+	jmp IRUNLP
+
+ZSTEP:
+	lda #TIMEL
+	jsr BUILD
+
+	ldx CKLN
+	lda CKLN+1
+	sta BITPAT
+	jsr OUTPUT
+
+	lda BITPAT	;Calculate clock toggle
+	eor #$FF
+	sta NOTBPT
+
+	jsr ZTRACE	;Output current bus state
+	jsr Z80IO	;Check if Z80 is requesting I/O
+	ZRUNLP:
+	ldx CKLN
+	lda NOTBPT	;Toggle clock
+	and BASE,X
+	sta BASE,X
+
+	jsr ZTRACE	;Output current bus state
+	jsr Z80IO	;Check if Z80 is requesting I/O
+
+	jsr STEPDLY
+
+	ldx CKLN
+	lda BITPAT	;Toggle clock
+	ora BASE,X
+	sta BASE,X
+
+	jsr ZTRACE	;Output current bus state
+	jsr Z80IO	;Check if Z80 is requesting I/O
+
+	jsr STEPDLY
+
+	jmp ZRUNLP

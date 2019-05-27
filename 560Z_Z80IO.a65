@@ -1,0 +1,251 @@
+;560Z Z80 IN/OUT handler
+;Demo handles port 0
+;
+;Zero-page defines
+;
+PORT=$21
+DATA=$22
+TEMP=$23
+JMPL=$24
+JMPH=$25
+WR=$26
+;
+;Change the line below based on your 560Z setup.
+;The default PIA base address of the 560Z is $F000
+BASE=$B000	;560Z PIA base address
+;
+;Defines for optional auxiliary ACIA
+;
+ACIA6551 = $9400
+ACIA6551_Data = ACIA6551
+ACIA6551_Status = ACIA6551+1
+ACIA6551_Command = ACIA6551+2
+ACIA6551_Control = ACIA6551+3
+;
+;Defines for standard OSI 502/510 6850 ACIA
+;
+ACIA6850	= $FC00
+ACIA6850_Data	= ACIA6850+1
+ACIA6850_Control	= ACIA6850 
+;
+;Change the line below to set the ACIA to use with this driver package.
+;1 = use an auxiliary 6551 ACIA
+;2 = use the OSI 502/510's built-in ACIA
+ACIA = 2
+;
+;Defines for which ACIA to use
+;
+.if ACIA = 1
+	ACIA_Status = ACIA6551_Status
+	ACIA_Data = ACIA6551_Data
+	ACIA_Flag_TX = $10
+	ACIA_Flag_RX = $08
+.elseif ACIA = 2
+	ACIA_Status = ACIA6850_Control
+	ACIA_Data = ACIA6850_Data
+	ACIA_Flag_TX = $02
+	ACIA_Flag_RX = $01
+.else
+	.fatal "ACIA selection is not valid!"
+.endif
+;
+;References to utilities package
+;
+.import READD,INPUT,OUTPUT,OUTBL,OUTBH,RUNSTP,CKLN,D7,A7,Z80WR,IORQ,OUTCH,INCH,DIGIT,CRLF,BYTE,ZTRACE,TRACE
+
+.export Z80IO
+
+.segment "Z80IO"
+
+Z80IO:
+	.if ACIA = 1		;Init auxiliary ACIA if enabled
+		LDA #$1E        ;* Init ACIA to 9600 Baud.
+		STA ACIA6551_Control
+		LDA #$0B        ;* No Parity.
+		STA ACIA6551_Command
+	.endif
+Z80IO0:
+	ldx IORQ	;Wait for I/O command
+	jsr READD
+	bit IORQ+1
+	;bne Z80IO
+	beq Z80IO1
+
+	lda TRACE
+	beq Z80IO0
+	rts
+Z80IO1:
+	ldx A7		;Read port number
+	jsr READD
+	sta PORT
+	
+	ldx RUNSTP	;Set single step mode
+	lda RUNSTP+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBL
+	
+	ldx CKLN	;Set up clock
+	lda CKLN+1
+	pha
+	jsr OUTPUT
+	pla
+	jsr OUTBH
+
+	ldx Z80WR	;See if read or write
+	jsr READD
+	and Z80WR+1
+	sta WR
+	beq LOW
+
+
+HIGH:
+	jmp SELECT
+LOW:			;OUT command
+	ldx D7
+	jsr READD
+	sta DATA
+	jmp SELECT
+;
+;Clock CKLN (Flip flop it)
+;
+CLOCK:
+	ldx CKLN
+	lda BASE,X
+	eor CKLN+1
+	sta BASE,X
+	rts
+;
+;Clock Z80 out of IORQ and let it loose
+;
+NOTHIN:
+	ldx IORQ	;Clock Z80 until IORQ is clear
+	jsr READD
+	bit IORQ+1
+	bne NEXT
+	jsr CLOCK
+	jmp NOTHIN
+	NEXT:
+	jsr CLOCK
+
+	lda TRACE
+	beq NEXT1
+	jsr ZTRACE
+	NEXT1:
+	ldx D7		;Reset data lines as inputs
+	lda #$FF
+	jsr INPUT
+
+	ldx RUNSTP	;Release Z80
+	lda RUNSTP+1
+	jsr OUTBH
+
+	jmp Z80IO0
+;
+;ACIA Data(Port 0)
+;
+TTY:
+	lda WR
+	beq TTYWRT
+TTYRED:
+	lda ACIA_Status
+	and #ACIA_Flag_RX
+	beq TTYRED
+	lda ACIA_Data
+	jmp GIVE
+TTYWRT:
+	lda ACIA_Status
+	and #ACIA_Flag_TX
+	beq TTYWRT
+	lda DATA
+	sta ACIA_Data
+	jmp NOTHIN
+;
+;Give AC to Z80
+;
+GIVE:
+	ldx D7
+	pha
+	lda #$FF
+	jsr OUTPUT
+	pla
+	sta BASE,X
+	jmp NOTHIN
+
+VECL:	.word VECTOR
+;
+;Select a port handling subroutine
+;
+SELECT:
+	ldx PORT
+	lda INDX,X
+	sta TEMP	;Times 3
+	asl a
+	clc
+	adc TEMP
+	clc
+	adc VECL
+	sta JMPL
+	lda #0
+	adc VECL+1
+	sta JMPH
+	jmp (JMPL)
+;
+;Table of indexes to vectors
+;
+INDX:
+.byte 1
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.byte 0
+.word 0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+.word 0,0,0,0
+;
+;Vectors
+;
+VECTOR:
+	jmp NOTHIN
+	jmp TTY
